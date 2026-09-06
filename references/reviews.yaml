@@ -1,0 +1,144 @@
+project:
+  name: MSCI Rebalancing Prediction Engine
+  config_version: '2.1'
+  review_frequency: quarterly
+  review_months:
+  - February
+  - May
+  - August
+  - November
+  review_key_format: YYYY-MM
+  identity_key: security_id
+  primary_key:
+  - review
+  - security_id
+conventions:
+  equity_universe_cutoff: last NSE business day of the methodology equity-universe cutoff month
+  liquidity_cutoff: last NSE business day of the methodology liquidity cutoff month
+  price_cutoff:
+    methodology_window: one of the last 10 business days of the month before the review month
+    project_rule: deterministic historical market date used consistently across PIT reconstruction
+    field_name: price_cutoff_market_date
+  point_in_time:
+    allow_data_after_review_cutoff: false
+    same_review_label_use: false
+    future_review_label_use: false
+  fif_vintages:
+    legacy: pre-Feb-2026 review FIF methodology
+    feb_2026_transition: Feb-2026 transition treatment; historical public-data reconstruction is not exhaustive for every
+      adjustment-event decrease
+    may_2026_enhanced: 'May-2026 enhanced FIF rounding: >25% nearest 2.5%; 5-25% nearest 0.5%; <5% nearest 0.1%, with stability
+      buffers'
+reviews:
+  2023-05:
+    equity_universe_cutoff: '2023-02-28'
+    liquidity_cutoff: '2023-03-31'
+    price_cutoff_market_date: '2023-04-17'
+    fif_vintage: legacy
+    eumsr_usd_m: 292.0
+    burn_in: true
+    scored: false
+  2023-08:
+    equity_universe_cutoff: '2023-05-31'
+    liquidity_cutoff: '2023-06-30'
+    price_cutoff_market_date: '2023-07-18'
+    fif_vintage: legacy
+    eumsr_usd_m: 291.0
+    burn_in: false
+    scored: true
+  2023-11:
+    equity_universe_cutoff: '2023-08-31'
+    liquidity_cutoff: '2023-09-29'
+    price_cutoff_market_date: '2023-10-18'
+    fif_vintage: legacy
+    eumsr_usd_m: 313.0
+    burn_in: false
+    scored: true
+  2024-02:
+    equity_universe_cutoff: '2023-11-30'
+    liquidity_cutoff: '2023-12-29'
+    price_cutoff_market_date: '2024-01-18'
+    fif_vintage: legacy
+    eumsr_usd_m: 323.0
+    burn_in: false
+    scored: true
+  2024-05:
+    equity_universe_cutoff: '2024-02-29'
+    liquidity_cutoff: '2024-03-28'
+    price_cutoff_market_date: '2024-04-17'
+    fif_vintage: legacy
+    eumsr_usd_m: 371.0
+    burn_in: false
+    scored: true
+  2024-08:
+    equity_universe_cutoff: '2024-05-31'
+    liquidity_cutoff: '2024-06-28'
+    price_cutoff_market_date: '2024-07-18'
+    fif_vintage: legacy
+    eumsr_usd_m: 383.0
+    burn_in: false
+    scored: true
+  2024-11:
+    equity_universe_cutoff: '2024-08-30'
+    liquidity_cutoff: '2024-09-30'
+    price_cutoff_market_date: '2024-10-18'
+    fif_vintage: legacy
+    eumsr_usd_m: 422.0
+    burn_in: false
+    scored: true
+  2025-02:
+    equity_universe_cutoff: '2024-11-29'
+    liquidity_cutoff: '2024-12-31'
+    price_cutoff_market_date: '2025-01-20'
+    fif_vintage: legacy
+    eumsr_usd_m: 443.0
+    burn_in: false
+    scored: true
+  2025-05:
+    equity_universe_cutoff: '2025-02-28'
+    liquidity_cutoff: '2025-03-31'
+    price_cutoff_market_date: '2025-04-17'
+    fif_vintage: legacy
+    eumsr_usd_m: 430.0
+    burn_in: false
+    scored: true
+  2025-08:
+    equity_universe_cutoff: '2025-05-30'
+    liquidity_cutoff: '2025-06-30'
+    price_cutoff_market_date: '2025-07-18'
+    fif_vintage: legacy
+    eumsr_usd_m: 448.0
+    burn_in: false
+    scored: true
+  2025-11:
+    equity_universe_cutoff: '2025-08-29'
+    liquidity_cutoff: '2025-09-30'
+    price_cutoff_market_date: '2025-10-20'
+    fif_vintage: legacy
+    eumsr_usd_m: 505.0
+    burn_in: false
+    scored: true
+  2026-02:
+    equity_universe_cutoff: '2025-11-28'
+    liquidity_cutoff: '2025-12-31'
+    price_cutoff_market_date: '2026-01-19'
+    fif_vintage: feb_2026_transition
+    eumsr_usd_m: 507.0
+    burn_in: false
+    scored: true
+  2026-05:
+    equity_universe_cutoff: '2026-02-27'
+    liquidity_cutoff: '2026-03-31'
+    price_cutoff_market_date: '2026-04-17'
+    fif_vintage: may_2026_enhanced
+    eumsr_usd_m: 537.0
+    burn_in: false
+    scored: true
+repository:
+  methodology_reference: references/methodology.yaml
+  reviews_reference: references/reviews.yaml
+  price_cutoff_snapshot: data/processed/india_price_cutoff_snapshot.parquet
+  gmsr_estimates: data/processed/gmsr_estimates.parquet
+  review_fif: data/processed/review_fif.parquet
+  review_labels: data/processed/review_labels.parquet
+  final_backtest_directory: data/backtest

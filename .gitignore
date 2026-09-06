@@ -1,0 +1,9 @@
+# Python cache
+
+**pycache**/
+*.pyc
+
+# Large reproducible derived datasets
+
+data/processed/market_data.parquet
+data/processed/market_data_fif.parquet

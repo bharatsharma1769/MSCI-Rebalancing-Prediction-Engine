@@ -1,0 +1,1128 @@
+project:
+  name: "MSCI Rebalancing Prediction Engine"
+  version: "2.1"
+  environment: "research_frozen_backtest"
+  target_market: "India"
+  market_classification: "Emerging Market"
+  target_index: "MSCI India Standard"
+  methodology_version: "Review-vintage-aware public MSCI GIMI methodology reconstruction through May 2026"
+
+  implementation_scope:
+    exchange_scope: "NSE EQ only"
+    permanent_identity: "security_id"
+    primary_review_key: ["review", "security_id"]
+    burn_in_review: "2023-05"
+    scored_review_start: "2023-08"
+    scored_review_end: "2026-05"
+    paid_data_used: false
+    current_status: "Final research repository; paths aligned to current skeleton"
+
+  methodology_scope:
+    include:
+      - "Regular quarterly index reviews"
+      - "Standard Index additions and deletions"
+      - "Large/Mid/Small size-segment construction needed to determine Standard membership"
+      - "India-specific FIF, foreign ownership, FOL, and foreign-room treatment"
+      - "Point-in-time historical universe reconstruction"
+      - "Scenario-based treatment of unresolved historical methodology inputs"
+      - "Walk-forward ranking overlay for Standard additions"
+    defer_to_later:
+      - "Complex corporate-event implementation beyond repairs required for the backtest"
+      - "Light rebalancing under market stress"
+      - "Detailed GICS index construction"
+      - "Micro Cap methodology"
+      - "Frontier / Standalone market rules"
+# -----------------------------------------------------------------------------
+# 1. EQUITY UNIVERSE
+# -----------------------------------------------------------------------------
+equity_universe:
+  level: "company_and_security"
+
+  eligible_local_listings:
+    country: "India"
+    exchange: "NSE"
+    allowed_series: ["EQ"]
+    allowed_security_types:
+      - "Ordinary Shares"
+    historical_delisted_and_replaced_securities_included: true
+
+  excluded_security_types:
+    - "Mutual Funds"
+    - "ETFs"
+    - "Equity Derivatives"
+    - "Most Investment Trusts"
+    - "Non-EQ NSE series"
+
+  foreign_listings:
+    enabled: false
+    note: >
+      The current engine is intentionally restricted to NSE EQ listings. Eligible
+      foreign listings and listing-priority rules are outside the current scope.
+
+  identity_and_history:
+    permanent_key: "security_id"
+    symbol_is_not_identity: true
+    survivorship_bias_prohibited: true
+    historical_identifiers_preserved:
+      - "HIST_HDFC"
+      - "HIST_TATAMTRDVR"
+    note: >
+      Historical universe membership is reconstructed point in time. Delisted,
+      merged, renamed, or replaced securities must not be dropped merely because
+      they are absent from the current NSE master.
+
+  company_security_mapping:
+    required: true
+    note: >
+      Investability screens may apply either at company level or individual-security
+      level. Size segmentation is based on company full market capitalization.
+# -----------------------------------------------------------------------------
+# 2. MARKET CAPITALIZATION
+# -----------------------------------------------------------------------------
+market_capitalization:
+  full_security_market_cap:
+    inputs:
+      - "price"
+      - "number_of_shares"
+    formula: "price * number_of_shares"
+    base_currency: "USD"
+    local_currency: "INR"
+    fx_conversion_required: true
+
+  full_company_market_cap:
+    formula: "sum(full_security_market_cap for all eligible securities of company)"
+    use_for:
+      - "Equity Universe Minimum Size"
+      - "Company ranking for size segmentation"
+      - "Market Size-Segment Cutoff"
+
+  free_float_adjusted_security_market_cap:
+    inputs:
+      - "full_security_market_cap"
+      - "final_fif"
+    formula: "full_security_market_cap * final_fif"
+    use_for:
+      - "Investability screens"
+      - "Cumulative market coverage"
+      - "Index weighting"
+
+  free_float_adjusted_company_market_cap:
+    formula: "sum(free_float_adjusted_security_market_cap for eligible securities of company)"
+    use_for:
+      - "Cumulative market coverage calculations"
+# -----------------------------------------------------------------------------
+# 3. FREE FLOAT / FIF
+# -----------------------------------------------------------------------------
+free_float_and_fif:
+  source_principle: "Publicly available point-in-time shareholder information"
+  canonical_raw_output: "data/raw/fif/fif.parquet"
+  canonical_review_output: "data/processed/review_fif.parquet"
+
+  non_free_float_definition:
+    description: >
+      Shares classified as strategic / non-free-float are excluded from available
+      free float where the public shareholding data permits reconstruction.
+    india_public_data_candidates:
+      - "Promoter and promoter-group holdings"
+      - "Government / strategic holdings where non-free-float"
+      - "Other identifiable strategic holdings"
+
+  estimated_free_float:
+    no_fol:
+      formula: "1 - non_free_float_shareholding_pct"
+    subject_to_fol:
+      formula: >
+        min(1 - total_non_free_float_shareholding_pct,
+            foreign_ownership_limit - foreign_non_free_float_shareholding_pct)
+    implementation_note: >
+      Raw ownership, FOL, and foreign-room evidence are preserved separately.
+      Foreign-room adjustment used in final Standard evaluation is not silently
+      folded into the canonical review_fif series.
+
+  review_vintages:
+    qcir_start_review: "2023-05"
+    pre_2026_02:
+      rule_family: "legacy FIF review logic"
+      note: "Do not retroactively apply later rounding rules."
+    "2026-02":
+      rule_family: "transition review"
+      caveat: >
+        Public reconstruction is not exhaustive for every FOL/adjustment-event
+        decrease in the transition review.
+    from_2026_05:
+      rule_family: "enhanced rounding"
+      rounding:
+        free_float_gt_25pct: "nearest 2.5 percentage points"
+        free_float_5_to_25pct: "nearest 0.5 percentage points"
+        free_float_lt_5pct: "nearest 0.1 percentage points"
+      stability_buffers: "preserved from the applicable methodology"
+
+  point_in_time_rules:
+    use_only_information_available_by_review_cutoff: true
+    carry_forward_only_when_methodologically_valid: true
+    missing_decision_relevant_history: "UNRESOLVED"
+    no_backfill_from_future_disclosures: true
+
+  known_interval_cases:
+    - review: "2023-11"
+      security_id: "HIST_TATAMTRDVR"
+      treatment: "preserve FIF uncertainty interval"
+
+  limited_investability_factor:
+    enabled: false
+    default: 1.0
+    note: >
+      A separate Limited Investability Factor is not generically reconstructed in
+      the current India engine.
+# -----------------------------------------------------------------------------
+# 4. INITIAL INVESTABILITY SCREENS
+# -----------------------------------------------------------------------------
+investability_screens:
+
+  equity_universe_minimum_size:
+    level: "company"
+    reference_universe: "Developed Market Equity Universe"
+    ranking_variable: "full_company_market_cap"
+    coverage_variable: "free_float_adjusted_company_market_cap"
+    initial_construction_rule:
+      target_cumulative_coverage: 0.99
+      threshold: "full_company_market_cap at 99% cumulative FF-adjusted coverage"
+
+    regular_review_update_rule:
+      use_previous_reference_rank: true
+      lower_coverage_bound: 0.99
+      upper_coverage_bound: 0.9925
+      if_within_range: "use full market cap at previous reference rank"
+      if_below_lower_bound: "reset rank and threshold at 99% coverage"
+      if_above_upper_bound: "reset rank and threshold at 99.25% coverage"
+
+    same_threshold_for_dm_and_em: true
+
+    may_2025_reference_usd:
+      value: 430000000
+      informational_only: true
+
+    existing_imi_constituent_treatment:
+      evaluated_against_requirement: false
+
+  minimum_free_float_adjusted_market_cap:
+    level: "security"
+    threshold_formula: "0.50 * equity_universe_minimum_size_requirement"
+    applies_to:
+      - "Non-IMI constituents"
+    existing_imi_constituent_treatment:
+      evaluated_against_requirement: false
+
+  minimum_liquidity:
+    level: "security"
+    methodology_reference: "MSCI Liquidity Data Methodology"
+    use_proxy: false
+
+    measures:
+      - "12_month_ATVR"
+      - "3_month_ATVR"
+      - "3_month_frequency_of_trading"
+
+    new_constituents_em:
+      twelve_month_atvr_min: 0.15
+      three_month_atvr_min: 0.15
+      three_month_frequency_min: 0.80
+      quarterly_consistency_requirement: >
+        3-month ATVR and 3-month Frequency of Trading are assessed over the
+        last four consecutive quarters as prescribed by MSCI.
+
+    existing_imi_constituents_em:
+      twelve_month_atvr_min: 0.10
+      three_month_atvr_min: 0.05
+      three_month_frequency_min: 0.70
+
+    insufficient_history:
+      twelve_month_atvr:
+        fallback_windows_months: [6, 3, 1]
+      three_month_atvr_and_frequency:
+        fallback_window_months: 1
+
+    extreme_stock_price_rule:
+      applies_to: "Non-constituents"
+      max_price_usd: 10000
+
+    liquidity_adjustment_factor_exception:
+      enabled: true
+      applies_only_if:
+        - "Existing Standard constituent in an Emerging Market"
+        - "Fails existing-constituent liquidity requirements"
+        - "Country index weight > 10%"
+        - "FF-adjusted market cap > 0.5 * EM Standard Global Minimum Size Reference"
+      adjustment_factor: 0.5
+      note: >
+        Do not apply this factor generically to all liquidity failures.
+
+  minimum_fif:
+    level: "security"
+    standard_minimum_fif: 0.15
+
+    new_security_exception:
+      if_fif_below_0_15:
+        required_ff_market_cap_formula: >
+          1.8 * 0.5 * Standard_Interim_Market_Size_Segment_Cutoff
+
+    existing_imi_constituent_treatment:
+      evaluated_against_initial_requirement: false
+
+  minimum_length_of_trading:
+    level: "security"
+    normal_minimum_months: 3
+    applies_to: "Small new issues / normal new securities"
+
+    short_history_exception:
+      required_full_market_cap_formula: >
+        1.8 * Standard_Interim_Market_Size_Segment_Cutoff
+      required_ff_market_cap_formula: >
+        1.8 * 0.5 * Standard_Interim_Market_Size_Segment_Cutoff
+
+    large_ipo_or_offering:
+      separate_early_inclusion_rules: true
+      note: >
+        Large IPOs and large primary/secondary offerings may be eligible for early
+        inclusion outside a regular review under MSCI Corporate Events Methodology.
+
+  minimum_foreign_room:
+    level: "security"
+    applies_if_subject_to_fol: true
+
+    formula: >
+      (foreign_ownership_limit - current_foreign_ownership) /
+      foreign_ownership_limit
+
+    new_security_minimum: 0.15
+
+    india_specific:
+      monitor_nsdl_cdsl_restriction_lists: true
+      red_flag_or_breach_restriction_can_block_new_inclusion: true
+  current_implementation:
+    canonical_output: "data/processed/mieu_review_state.parquet"
+    state_values: ["PASS", "FAIL", "UNRESOLVED"]
+    prior_membership_recursive: true
+    interval_aware: true
+    unresolved_inputs_propagate: true
+    lookahead_validation: true
+    note: >
+      Existing-constituent treatment and uncertain historical inputs are carried
+      recursively review to review. Missing decision-relevant evidence is not
+      converted to a retrospective pass/fail using future information.
+# -----------------------------------------------------------------------------
+# 5. GLOBAL SIZE REFERENCE RANGES
+# -----------------------------------------------------------------------------
+global_size_references:
+  reference_universe: "Developed Market Investable Equity Universe"
+  ranking_variable: "full_company_market_cap"
+  coverage_variable: "free_float_adjusted_company_market_cap"
+
+  developed_markets:
+    large_cap:
+      coverage_reference: 0.70
+    standard:
+      coverage_reference: 0.85
+    investable_market:
+      coverage_reference: 0.99
+
+  emerging_markets:
+    multiplier_vs_dm: 0.50
+
+  size_range:
+    lower_multiplier: 0.50
+    upper_multiplier: 1.15
+
+  may_2025_reference_usd_millions:
+    informational_only: true
+    developed_markets:
+      large_cap: 39789
+      standard: 11856
+      investable_market: 885
+    emerging_markets:
+      large_cap: 19894
+      standard: 5928
+      investable_market: 442
+  current_implementation:
+    historical_reference_uncertainty: "represented through review scenarios where required"
+    no_future_global_reference_backfill: true
+# -----------------------------------------------------------------------------
+# 6. MARKET COVERAGE TARGETS
+# -----------------------------------------------------------------------------
+market_coverage_targets:
+  large_cap:
+    target: 0.70
+    lower: 0.65
+    upper: 0.75
+
+  standard:
+    target: 0.85
+    lower: 0.80
+    upper: 0.90
+
+  investable_market:
+    target: 0.99
+    lower: 0.985
+    upper: 1.00
+
+  mid_cap:
+    derived_as: "Standard minus Large Cap"
+
+  small_cap:
+    derived_as: "Investable Market minus Standard"
+# -----------------------------------------------------------------------------
+# 7. MARKET SIZE-SEGMENT CUTOFF CONSTRUCTION
+# -----------------------------------------------------------------------------
+size_segment_construction:
+  sort_companies_by: "full_company_market_cap descending"
+  cumulative_coverage_by: "free_float_adjusted_company_market_cap"
+
+  initial_construction:
+    select_company_near_coverage_target: true
+    if_company_size_within_global_size_range:
+      market_size_segment_cutoff: "full_company_market_cap of selected company"
+      segment_number_of_companies: "rank of selected company"
+    if_below_global_size_range:
+      action: "decrease company count until smallest company >= lower bound"
+    if_above_global_size_range:
+      action: "increase company count to include companies above upper bound"
+
+  quarterly_review:
+    calculate_interim_market_size_segment_cutoff: true
+    use_post_review_nos_and_fif_for_interim_calculation: true
+
+    initial_segment_number_of_companies:
+      rule: >
+        Derive using the updated Investable Equity Universe, prior size-segment
+        membership and the lower bound of the relevant Global Minimum Size RANGES
+
+    target_area_check:
+      acceptable_areas:
+        - "Size and Coverage Target Area"
+        - "Lower Size Range Boundary Proximity Area"
+        - "Upper Size Range Boundary Proximity Area"
+
+      lower_size_range_proximity:
+        lower_multiplier: 0.50
+        upper_multiplier: 0.575
+
+      upper_size_range_proximity:
+        lower_multiplier: 1.00
+        upper_multiplier: 1.15
+
+    segment_count_changes:
+      additions:
+        description: >
+          Increase company count when cutoff is above the upper size boundary
+          with investable companies between the current cutoff and boundary, or
+          when market coverage is below the lower coverage bound.
+      deletions:
+        description: >
+          Reduce company count when cutoff is below the lower size boundary or
+          market coverage is above the upper coverage bound.
+        first_reduction_limit_pct_of_initial_count: 0.05
+        second_reduction_limit_pct_of_initial_count: 0.20
+        note: >
+          Implement exact MSCI sequencing and exceptions before relying on this
+          module for historical production-grade replication.
+  scenario_engine:
+    scenarios_per_review: 8
+    canonical_output: "data/processed/standard_size_segment.parquet"
+    purpose:
+      - "Represent unresolved historical size-reference / cutoff inputs"
+      - "Preserve interval uncertainty instead of forcing a point estimate"
+    no_realized_membership_used_to_choose_scenario: true
+# -----------------------------------------------------------------------------
+# 8. SIZE-SEGMENT ASSIGNMENT & BUFFERS
+# -----------------------------------------------------------------------------
+size_segment_assignment:
+  priority_order:
+    - >
+      Current constituents of the size segment, and companies assigned to it at
+      the last review but failing final investability requirements, with full market
+      cap >= Market Size-Segment Cutoff.
+    - "Newly investable companies with full market cap >= Market Size-Segment Cutoff."
+    - >
+      Companies above the upper buffer threshold of the lower segment, including
+      eligible lower-segment constituents / prior eligible companies.
+    - >
+      Current constituents within the lower buffer of the size segment, in descending
+      capitalization order, until the buffer threshold is reached.
+    - "Largest companies from the upper buffer of the next lower size segment."
+
+  regular_review_buffers:
+    lower_buffer_multiplier: 0.6666666667
+    upper_buffer_multiplier: 1.50
+
+  standard_small_boundary:
+    standard_lower_buffer: "2/3 * Standard Market Size-Segment Cutoff"
+    small_upper_buffer: "1.5 * Standard Market Size-Segment Cutoff"
+
+  small_cap_entry_buffer:
+    enabled: true
+    boundary_multiplier: 1.50
+    reference: "Investable Market Size-Segment Cutoff"
+
+  derived_segments:
+    mid_cap: "Standard minus Large Cap"
+    small_cap: "Investable Market minus Standard"
+# -----------------------------------------------------------------------------
+# 9. FINAL SIZE-SEGMENT INVESTABILITY REQUIREMENTS
+# -----------------------------------------------------------------------------
+final_size_segment_investability:
+
+  minimum_ff_market_cap:
+    standard_new_constituent:
+      if_cutoff_within_global_range:
+        threshold_formula: "0.50 * Standard_Market_Size_Segment_Cutoff"
+      if_cutoff_above_global_range:
+        threshold_formula: "0.50 * Standard_Global_Size_Range_Upper_Bound"
+      if_cutoff_below_global_range:
+        threshold_formula: "0.50 * Standard_Global_Size_Range_Lower_Bound"
+
+    investable_market_new_constituent:
+      if_cutoff_within_global_range:
+        threshold_formula: "0.50 * IMI_Market_Size_Segment_Cutoff"
+      if_cutoff_above_global_range:
+        threshold_formula: "0.50 * IMI_Global_Size_Range_Upper_Bound"
+      if_cutoff_below_global_range:
+        threshold_formula: "0.50 * IMI_Global_Size_Range_Lower_Bound"
+
+    fif_below_0_15_standard_new:
+      threshold_multiplier: 1.8
+      reference: "minimum FF market cap required for Standard"
+
+    existing_constituents:
+      general_retention_multiplier: 0.6666666667
+      existing_standard_fif_below_0_15:
+        threshold_formula: >
+          (2/3) * 1.8 * minimum_FF_market_cap_required_for_Standard
+
+  foreign_room_adjustment:
+    new_constituents:
+      foreign_room_ge_25pct:
+        adjustment_factor: 1.0
+      foreign_room_15_to_25pct:
+        adjustment_factor: 0.5
+      foreign_room_lt_15pct:
+        eligible: false
+
+    existing_constituents:
+      transition_matrix:
+        current_factor_1_00:
+          foreign_room_ge_25pct: 1.00
+          foreign_room_15_to_25pct: 1.00
+          foreign_room_7_5_to_15pct: 0.50
+          foreign_room_3_75_to_7_5pct: 0.25
+          foreign_room_lt_3_75pct: 0.00
+
+        current_factor_0_50:
+          foreign_room_ge_25pct: 1.00
+          foreign_room_15_to_25pct: 0.50
+          foreign_room_7_5_to_15pct: 0.50
+          foreign_room_3_75_to_7_5pct: 0.25
+          foreign_room_lt_3_75pct: 0.00
+
+        current_factor_0_25:
+          foreign_room_ge_25pct: 1.00
+          foreign_room_15_to_25pct: 0.50
+          foreign_room_7_5_to_15pct: 0.25
+          foreign_room_3_75_to_7_5pct: 0.25
+          foreign_room_lt_3_75pct: 0.00
+
+      upward_adjustment_wait_months: 12
+
+      india_daily_monitoring:
+        breach_list_delete: true
+        red_flag_or_caution_and_room_below_3_75pct_delete: true
+        notice_business_days: 2
+
+  extreme_price_increase:
+    applies_to: "Potential additions to Standard"
+    compare_excess_return_to:
+      preferred: "Average return of same India GICS sector IMI constituents"
+      fallback_if_sector_has_5_or_fewer_imi_constituents: "India IMI return"
+
+    monitoring_period_thresholds:
+      5: 1.00
+      10: 1.00
+      15: 1.00
+      20: 1.00
+      25: 2.00
+      30: 2.00
+      35: 2.00
+      40: 2.00
+      45: 4.00
+      50: 4.00
+      55: 4.00
+      60: 4.00
+      90: 5.00
+      120: 8.00
+      150: 15.00
+      180: 15.00
+      250: 25.00
+
+    if_any_threshold_breached:
+      eligible_for_standard_addition: false
+
+    ipo_short_history_exception:
+      exempt_if_otherwise_eligible_under_short_trading_history_exception: true
+  current_implementation:
+    canonical_output: "data/processed/standard_review_state.parquet"
+    scenario_state_values: ["PASS", "FAIL", "UNRESOLVED"]
+    foreign_room_source_output: "data/processed/foreign_room.parquet"
+    structural_caveat: >
+      India FPI/FDI two-headroom treatment is not fully reconstructed from public
+      historical data. The engine preserves the available ownership/FOL evidence
+      and fails unresolved where the missing distinction could change the decision.
+# -----------------------------------------------------------------------------
+# 10. INDEX CONTINUITY
+# -----------------------------------------------------------------------------
+index_continuity:
+  enabled: true
+  current_backtest_triggers: 0
+  note: >
+    Continuity is implemented as a separate layer and was not triggered in the
+    scored 2023-08 to 2026-05 backtest window.
+# -----------------------------------------------------------------------------
+# 11. REVIEW MAINTENANCE / CUT-OFF DATES
+# -----------------------------------------------------------------------------
+review_schedule:
+  reviews_per_year:
+    - "February"
+    - "May"
+    - "August"
+    - "November"
+
+  cutoff_calendar:
+    february:
+      equity_universe_cutoff: "Last business day of November"
+      liquidity_cutoff: "Last business day of December"
+      price_cutoff_window: "Any one of the last 10 business days of January"
+
+    may:
+      equity_universe_cutoff: "Last business day of February"
+      liquidity_cutoff: "Last business day of March"
+      price_cutoff_window: "Any one of the last 10 business days of April"
+
+    august:
+      equity_universe_cutoff: "Last business day of May"
+      liquidity_cutoff: "Last business day of June"
+      price_cutoff_window: "Any one of the last 10 business days of July"
+
+    november:
+      equity_universe_cutoff: "Last business day of August"
+      liquidity_cutoff: "Last business day of September"
+      price_cutoff_window: "Any one of the last 10 business days of October"
+
+  data_usage:
+    equity_universe_cutoff:
+      used_for:
+        - "Equity Universe update"
+        - "Equity Universe Minimum Size update"
+
+    liquidity_cutoff:
+      used_for:
+        - "ATVR"
+        - "Frequency of Trading"
+
+    price_cutoff:
+      used_for:
+        - "Market-cap prices"
+        - "FIF review"
+        - "NOS review"
+        - "Corporate-event information where methodology specifies"
+  current_implementation:
+    review_specific_resolved_dates: true
+    price_cutoff_field: "price_cutoff_market_date"
+    no_same_review_future_information: true
+    note: >
+      The generic calendar defines the methodology window. The engine resolves
+      explicit market dates per historical review and carries those dates through
+      downstream PIT state tables.
+# -----------------------------------------------------------------------------
+# 12. FIF / NOS REVIEW
+# -----------------------------------------------------------------------------
+quarterly_data_updates:
+
+  fif:
+    review_frequency: "Quarterly"
+    review_months: ["February", "May", "August", "November"]
+    canonical_raw_output: "data/raw/fif/fif.parquet"
+    canonical_review_output: "data/processed/review_fif.parquet"
+    review_vintage_aware: true
+    cutoff_reference: "Price Cutoff Date"
+    no_future_disclosure_backfill: true
+
+  number_of_shares:
+    review_frequency: "Quarterly"
+    canonical_history_source: "NSE XBRL shareholding/corporate-action evidence"
+    event_date_checkpointing: true
+    fallback_source: "Yahoo Finance only where required"
+    point_in_time_required: true
+    cutoff_reference: "Price Cutoff Date"
+    note: >
+      Shares are maintained as event-level observations and merged point in time;
+      future share counts must never be backfilled into earlier reviews.
+# -----------------------------------------------------------------------------
+# 13. CORPORATE EVENTS / IPOs
+# -----------------------------------------------------------------------------
+corporate_events:
+  enabled_for_v1:
+    basic_nos_updates: true
+    basic_fif_updates: true
+    stock_splits: true
+    bonus_issues: true
+    rights_issues: true
+    mergers_and_spin_offs: "partial"
+    complex_event_logic: false
+
+  large_ipos_and_offerings:
+    early_inclusion_possible: true
+    separate_methodology_reference: "MSCI Corporate Events Methodology"
+
+  review_interaction:
+    include_events_completed_on_or_before_price_cutoff: true
+    note: >
+      Exact event timing and post-cutoff handling should follow the Corporate
+      Events Methodology and GIMI §3.2.8.
+  historical_repairs_used_in_backtest:
+    - "HIST_HDFC"
+    - "HIST_TATAMTRDVR"
+    - "NESTLE share changes"
+    - "JIOFIN"
+    - "BRITANNIA"
+    - "MCX"
+  repair_principle: >
+    Repairs are allowed only when supported by historical public evidence and
+    required to restore point-in-time data continuity; they are not outcome-driven
+    adjustments to MSCI membership.
+# -----------------------------------------------------------------------------
+# 14. INDIA-SPECIFIC PUBLIC DATA MAPPING (Sources used)
+# -----------------------------------------------------------------------------
+india_data_mapping:
+  exchange_universe:
+    scope: "NSE EQ"
+    primary_source: "NSE security master / historical NSE files"
+    delisted_history_used: true
+
+  prices_and_volume:
+    primary_source: "Yahoo Finance for NSE symbols where history is available"
+    historical_fallback: "NSE archives for delisted / unavailable symbols"
+    point_in_time_required: true
+
+  shares_outstanding:
+    primary_sources:
+      - "NSE corporate shareholding XBRL"
+      - "NSE corporate actions"
+    fallback:
+      - "Yahoo Finance where public NSE history is unavailable"
+    point_in_time_required: true
+
+  free_float_and_shareholding:
+    primary_sources:
+      - "NSE shareholding pattern / XBRL disclosures"
+      - "Public company disclosures where required"
+    point_in_time_required: true
+
+  foreign_ownership:
+    canonical_output: "data/processed/historical_foreign_ownership.parquet"
+    sources:
+      - "NSDL public historical information"
+      - "Public depository / regulatory disclosures"
+
+  foreign_ownership_limits:
+    canonical_output: "data/processed/historical_fol.parquet"
+    sources:
+      - "NSDL"
+      - "CDSL"
+      - "NSE foreign investment limit reports"
+      - "Public company/regulatory disclosures"
+
+  foreign_room:
+    canonical_output: "data/processed/foreign_room.parquet"
+    calculated_from_point_in_time_ownership_and_fol: true
+
+  liquidity:
+    canonical_output: "data/processed/liquidity_monthly.parquet"
+    inputs:
+      - "Price"
+      - "Volume"
+      - "Trading-day history"
+    methodology_target: "MSCI ATVR and Frequency of Trading treatment"
+
+  fx:
+    pair: "USDINR"
+    point_in_time_required: true
+
+  paid_or_proprietary_data:
+    bloomberg: false
+    other_paid_feeds: false
+# -----------------------------------------------------------------------------
+# 15. ENGINE OUTPUTS
+# -----------------------------------------------------------------------------
+prediction_outputs:
+  canonical_artifacts:
+    security_master: "data/processed/security_master.parquet"
+    historical_security_master: "data/processed/historical_security_master.parquet"
+    prices: "data/raw/prices/prices.parquet"
+    shares_nse: "data/raw/shares/shares_nse.parquet"
+    market_data: "data/processed/market_data.parquet"
+    market_data_fif: "data/processed/market_data_fif.parquet"
+    raw_fif: "data/raw/fif/fif.parquet"
+    review_fif: "data/processed/review_fif.parquet"
+    liquidity_monthly: "data/processed/liquidity_monthly.parquet"
+    gmsr_estimates: "data/processed/gmsr_estimates.parquet"
+    india_price_cutoff_snapshot: "data/processed/india_price_cutoff_snapshot.parquet"
+    india_size_cutoffs: "data/processed/india_size_cutoffs.parquet"
+    investability_eumsr: "data/processed/investability_eumsr.parquet"
+    investability_universe: "data/processed/investability_universe.parquet"
+    historical_foreign_ownership: "data/processed/historical_foreign_ownership.parquet"
+    historical_fol: "data/processed/historical_fol.parquet"
+    foreign_room: "data/processed/foreign_room.parquet"
+    mieu_review_state: "data/processed/mieu_review_state.parquet"
+    standard_mieu_companies: "data/processed/standard_mieu_companies.parquet"
+    standard_size_segment: "data/processed/standard_size_segment.parquet"
+    standard_continuity: "data/processed/standard_continuity.parquet"
+    standard_eligible: "data/processed/standard_eligible.parquet"
+    standard_review_state: "data/processed/standard_review_state.parquet"
+    msci_standard_membership: "data/processed/msci_standard_membership.parquet"
+    predicted_changes: "data/processed/predicted_changes.parquet"
+    candidate_rankings: "data/processed/candidate_rankings.parquet"
+    final_decisions: "data/processed/final_decisions.parquet"
+    backtest_results: "data/processed/backtest_results.parquet"
+    review_labels: "data/processed/review_labels.parquet"
+
+  identity:
+    permanent_security_key: "security_id"
+    review_security_key: ["review", "security_id"]
+    symbol_is_display_only: true
+
+  predicted_changes:
+    action_values:
+      - "ADD"
+      - "DELETE"
+      - "RETAIN"
+      - "ADD_OR_NONE"
+    scenario_fields:
+      - "scenario_count"
+      - "true_scenarios"
+      - "false_scenarios"
+      - "unresolved_scenarios"
+
+  candidate_rankings:
+    candidate_side_values: ["ADD", "DELETE"]
+    fields:
+      - "review"
+      - "security_id"
+      - "nse_symbol"
+      - "company_name"
+      - "candidate_side"
+      - "ranking_method"
+      - "ranking_score"
+      - "event_probability"
+      - "model_candidate_rank"
+      - "methodology_support"
+
+  final_decisions:
+    final_action_values: ["ADD", "DELETE"]
+    fields:
+      - "review"
+      - "security_id"
+      - "nse_symbol"
+      - "company_name"
+      - "final_action"
+      - "decision_source"
+      - "ranking_method"
+      - "ranking_score"
+      - "model_candidate_rank"
+      - "methodology_support"
+      - "methodology_event_count"
+      - "estimated_event_count"
+      - "expected_adds"
+      - "was_methodology_definite_call"
+
+  final_backtest_output_directory: "data/backtest"
+  final_backtest_files:
+    - "final_backtest_summary.csv"
+    - "final_backtest_by_review.csv"
+# -----------------------------------------------------------------------------
+# 16. BACKTEST / DATA-INTEGRITY RULES
+# -----------------------------------------------------------------------------
+backtest:
+  point_in_time_only: true
+  prohibit_future_data: true
+  prohibit_survivorship_bias: true
+  prohibit_outcome_leakage: true
+  preserve_review_specific_cutoffs: true
+  unresolved_when_critical_history_missing: true
+
+  review_window:
+    burn_in: "2023-05"
+    scored_start: "2023-08"
+    scored_end: "2026-05"
+
+  walk_forward_rules:
+    train_only_on_prior_scored_reviews: true
+    same_review_labels_forbidden: true
+    realized_event_count_forbidden_in_live_decision_rule: true
+    retrospective_top_n_is_oracle_only: true
+    feature_or_threshold_selection_after_outcome_inspection_must_be_disclosed: true
+
+  historical_state_required:
+    - "Prior MSCI segment membership"
+    - "Prior foreign-room adjustment state where reconstructable"
+    - "Prior FIF"
+    - "Prior NOS"
+    - "Prior size-segment state / cutoff interval"
+    - "Point-in-time liquidity and ownership evidence"
+
+  frozen_reference_results:
+    methodology_only:
+      additions:
+        calls: 37
+        correct: 23
+        actual: 65
+        precision: 0.622
+        recall: 0.354
+        f1: 0.451
+      deletions:
+        calls: 17
+        correct: 7
+        actual: 15
+        precision: 0.412
+        recall: 0.467
+        f1: 0.437
+
+    final_non_oracle:
+      additions:
+        calls: 65
+        correct: 39
+        actual: 65
+        precision: 0.600
+        recall: 0.600
+        f1: 0.600
+        f1_improvement_pp_vs_methodology: 14.9
+      deletions:
+        layer: "methodology_only"
+        calls: 17
+        correct: 7
+        actual: 15
+        precision: 0.412
+        recall: 0.467
+        f1: 0.437
+
+  reporting_caveat: >
+    The final ADD feature specification was finalized during historical model
+    development and therefore the 60% result is a walk-forward backtest, not an
+    untouched holdout result. Future reviews should be treated as genuinely
+    untouched validation.
+
+  evaluation_metrics:
+    - "Add precision"
+    - "Add recall"
+    - "Add F1"
+    - "Delete precision"
+    - "Delete recall"
+    - "Delete F1"
+    - "Per-review hits / calls"
+    - "Candidate coverage"
+    - "Candidate rank"
+    - "Scenario-supported recall"
+
+  error_categories:
+    - "FIF estimation"
+    - "Foreign ownership / FOL"
+    - "NOS / shares outstanding"
+    - "Liquidity / ATVR"
+    - "Global size reference"
+    - "Market size-segment cutoff"
+    - "Buffer interpretation"
+    - "Corporate event"
+    - "Security mapping"
+    - "Unknown MSCI judgment"
+    - "Data timing / cutoff mismatch"
+# -----------------------------------------------------------------------------
+# 17. IMPLEMENTATION FLAGS
+# -----------------------------------------------------------------------------
+implementation:
+  methodology_frozen: true
+  downstream_add_model_frozen: true
+  delete_model_status: "methodology_only"
+
+  exact_vs_approximate:
+    equity_universe_rules: "near_exact_with_NSE_EQ_scope"
+    full_market_cap: "point_in_time_given_available price and NOS evidence"
+    fif: "review-vintage public reconstruction with explicit caveats"
+    foreign_room: "partial public reconstruction; dual India headroom not fully resolved"
+    liquidity: "methodology-targeted public reconstruction"
+    global_size_references: "scenario/interval reconstruction where exact historical reference is unavailable"
+    india_size_segment_construction: "scenario-based implementation"
+    buffers: "implemented"
+    cutoff_calendar: "review-specific resolved PIT dates"
+    corporate_events: "partial; targeted historical repairs"
+
+  fail_policy:
+    fail_closed_on_missing_critical_data: false
+    unresolved_on_decision_relevant_missing_data: true
+    no_future_fill_to_resolve_missing_history: true
+
+  known_limitations:
+    - "India FPI/FDI two-headroom foreign-room structure is not fully reconstructed."
+    - "Feb-2026 FIF transition is not exhaustive for every public FOL/adjustment-event decrease."
+    - "HIST_TATAMTRDVR 2023-11 retains a PIT FIF interval."
+    - "No Bloomberg or other paid historical MSCI constituent dataset is used."
+    - "Corporate-event methodology is not implemented exhaustively."
+    - "Final ADD backtest is walk-forward but not an untouched holdout."
+
+  critical_missing_data:
+    - "price"
+    - "number_of_shares"
+    - "company mapping"
+    - "FIF or sufficient ownership data to estimate FIF"
+    - "historical constituent status"
+
+  freeze_policy:
+    do_not_retune_upstream_methodology_to_historical_outcomes: true
+    only_reopen_for_material_defect_or_new_primary_evidence: true
+    next_unseen_review_is_preferred_validation: true
+# -----------------------------------------------------------------------------
+# 18. DOWNSTREAM PREDICTION / DECISION LAYER
+# -----------------------------------------------------------------------------
+downstream_model:
+  additions:
+    enabled: true
+    candidate_universe: >
+      Non-Standard securities with MIEU PASS/UNRESOLVED that are methodology
+      supported, unresolved/provisional, or sufficiently near the Standard
+      market-cap / FF-market-cap boundary.
+
+    trajectory_calculation:
+      before_competitive_filtering: true
+      require_immediately_previous_review_for_delta: true
+
+    signals:
+      - "sig_ff_gap"
+      - "sig_support"
+      - "sig_mcap_gap"
+
+    model:
+      type: "pointwise logistic regression"
+      strict_walk_forward: true
+      class_weight: "balanced"
+      solver: "liblinear"
+      C: 0.20
+      max_iter: 2000
+      review_equalized_training_weights: true
+
+    count_rule:
+      "2023-08": "methodology warmup count"
+      from_2023_11: "round half up of median scenario ADD count"
+      realized_add_count_used: false
+
+    canonical_result:
+      calls: 65
+      correct: 39
+      actual: 65
+      precision: 0.600
+      recall: 0.600
+      f1: 0.600
+
+  deletions:
+    enabled_learned_model: false
+    final_rule: "methodology-only definite DELETE calls"
+    reason: >
+      Learned DELETE ranking and learned DELETE count experiments both
+      underperformed the methodology baseline on the small 15-event sample.
+    canonical_result:
+      calls: 17
+      correct: 7
+      actual: 15
+      precision: 0.412
+      recall: 0.467
+      f1: 0.437
+# -----------------------------------------------------------------------------
+# 19. CANONICAL PIPELINE
+# -----------------------------------------------------------------------------
+pipeline:
+  repository_layout:
+    backtest: "backtest/"
+    ingestion: "ingestion/"
+    methodology: "methodology/"
+    model: "model/"
+    raw_data: "data/raw/"
+    processed_data: "data/processed/"
+    backtest_outputs: "data/backtest/"
+    references: "references/"
+
+  stages:
+    base_market_data:
+      - "ingestion/market/security_master.py"
+      - "ingestion/market/build_historical_security_master.py"
+      - "ingestion/prices/prices.py"
+      - "ingestion/shares/shares.py"
+      - "ingestion/market/market_data.py"
+      - "ingestion/fif/fif.py"
+      - "ingestion/fif/market_data_fif.py"
+      - "ingestion/market/gmsr_estimator.py"
+      - "ingestion/market/india_size_cutoff_companies.py"
+      - "ingestion/liquidity/liquidity.py"
+
+    ownership_and_foreign_room:
+      - "ingestion/foreign ownership/foreign_room_candidates.py"
+      - "ingestion/foreign ownership/historical_foreign_ownership.py"
+      - "ingestion/foreign ownership/historical_fol.py"
+      - "ingestion/foreign ownership/foreign_room.py"
+      - "ingestion/foreign ownership/india_red_flag_breach.py"
+      - "ingestion/fif/review_fif.py"
+
+    review_methodology:
+      - "methodology/investability_universe.py"
+      - "methodology/eumsr_and_laf.py"
+      - "methodology/mieu_review_state.py"
+      - "methodology/standard_size_segment.py"
+      - "methodology/standard_assignment.py"
+      - "methodology/extreme_price_screen.py"
+      - "methodology/standard_final_requirements.py"
+      - "methodology/standard_review_state.py"
+      - "methodology/membership_layer.py"
+
+    prediction:
+      - "model/predict_changes.py"
+      - "model/rank_candidates.py"
+      - "model/final_decisions.py"
+
+    evaluation:
+      - "backtest/build_labels.py"
+      - "backtest/backtest_reviews.py"
+      - "backtest/backtest_ranking.py"
+      - "backtest/backtest_final.py"
+      - "backtest/error_analysis.py"
+
+  auxiliary_repair_and_research_modules:
+    prices:
+      - "ingestion/prices/historical_delisted_prices.py"
+      - "ingestion/prices/append_delisted_prices.py"
+    shares:
+      - "ingestion/shares/historical_delisted_shares.py"
+      - "ingestion/shares/append_delisted_shares.py"
+      - "ingestion/shares/shares_repair.py"
+    foreign_ownership:
+      - "ingestion/foreign ownership/build_historical_fol_research_queue.py"
+      - "ingestion/foreign ownership/cdsl_fol.py"
+      - "ingestion/foreign ownership/fol_master.py"
+      - "ingestion/foreign ownership/foreign_room_adjusted_state.py"
+      - "ingestion/foreign ownership/historical_fol_policy_baseline.py"
+      - "ingestion/foreign ownership/historical_fol_reconstruction.py"
+      - "ingestion/foreign ownership/historical_fol_targets.py"
+      - "ingestion/foreign ownership/nsdl_fol.py"
+      - "ingestion/foreign ownership/patch_new_foreign_room_keys.py"
+      - "ingestion/foreign ownership/reparse_all_historical_foreign_ownership.py"
+
+  canonical_keys:
+    permanent_identity: "security_id"
+    review_identity: ["review", "security_id"]
+
+  repository_cleanliness:
+    one_off_diagnostics_console_only: true
+    persist_only_outputs_used_downstream_or_needed_for_final_reporting: true
