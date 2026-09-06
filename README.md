@@ -1,4 +1,4 @@
-# MSCI India Standard Rebalancing Prediction Engine
+# MSCI India Standard Index Rebalancing Prediction Engine
 
 A public-data, point-in-time research engine for predicting **MSCI India Standard Index additions and deletions** ahead of quarterly review announcements.
 
